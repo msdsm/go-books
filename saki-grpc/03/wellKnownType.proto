@@ -1,0 +1,14 @@
+/* 
+Googleが定義してパッケージとして公開した便利型の集合であるWell Known Typesの利用例
+*/
+
+// Timestamp型を使う例
+
+// TimeStamp型を記述しているprotoファイルをimport
+import "google/protobuf/timestamp.proto";
+
+message MyMessage {
+    string message = 1;
+    // パッケージ名"google.protobuf" + 型名"Timestamp"で記述
+    google.protobuf.Timestamp create_time = 2;
+}
