@@ -108,6 +108,73 @@ type GreetingServiceClient interface {
     - https://protobuf.dev/reference/go/go-generated/
   - protoファイル上のメソッド定義がどんなサーバー/クライアント用のコードになるのか
     - https://grpc.io/docs/languages/go/generated-code/
+
+
+### gRPCサーバー実装
+- `src/cmd/server/main.go`にあるように`grpc.NewServer()`でgRPCサーバーを作成できる
+```go
+// 2. gRPCサーバーを作成
+s := grpc.NewServer()
+```
+- サーバーにサービスの登録をするにはprotoから生成した`RegisterGreetingServiceServer(s grpc.ServiceRegistrar, srv GreetingServiceServer)`を使う
+- `GreetingServiceServer`はinterfaceでソースを見ると以下のようになっている
+```go
+// GreetingServiceServerインターフェース型の定義
+type GreetingServiceServer interface {
+	// Helloメソッドを持つ
+	Hello(context.Context, *HelloRequest) (*HelloResponse, error)
+	mustEmbedUnimplementedGreetingServiceServer()
+}
+```
+- このinterfadeを実装するために新しい構造体を作成する
+```go
+type myServer struct {
+	hellopb.UnimplementedGreetingServiceServer
+}
+```
+- ここで`UnimplementedGreetingServiceServer`はprotocコマンドによって生成された構造体で、`GreetingServiceServer`インターフェースを満たすためのメソッドが定義されている
+```go
+func (UnimplementedGreetingServiceServer) Hello(context.Context, *HelloRequest) (*HelloResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Hello not implemented")
+}
+func (UnimplementedGreetingServiceServer) mustEmbedUnimplementedGreetingServiceServer() {}
+```
+- そのため`Hello`のビジネスロジックを記述すればよい
+```go
+func (s *myServer) Hello(ctx context.Context, req *hellopb.HelloRequest) (*hellopb.HelloResponse, error) {
+	// リクエストからnameフィールドを取り出して
+	// "Hello, [名前]!"というレスポンスを返す
+	return &hellopb.HelloResponse{
+		Message: fmt.Sprintf("Hello, %s!", req.GetName()),
+	}, nil
+}
+```
+- gRPCサーバーに登録する
+```go
+hellopb.RegisterGreetingServiceServer(s, NewMyServer())
+```
+- 動作確認のためにはgRPCurlを使う
+  - gRPCの通信はProtocol Bufferでシリアライズされている
+  - そのシリアライズ・デシリアライズを行うためにはprotoファイルによって書かれたシリアライズのルールを知る必要がある
+  - protoファイルによるメッセージ型の定義を知らないgRPCulコマンドは代わりにgRPCサーバーそのものからprotoファイルの情報を取得することでシリアライズのルールを知り通信する
+  - gRPCサーバーそのものからprotoファイルの情報を取得する必要があり、その機能がサーバーリフレクション
+```go
+// 4. サーバーリフレクションの設定
+reflection.Register(s)
+```
+- gRPCサーバーで稼働しているサービスの確認
+  - `grpcurl -plaintext localhost:8080 list`
+- サービスが持つメソッド一覧を表示(ここではGreetingService)
+  - `grpcurl -plaintext localhost:8080 list myapp.GreetingService`
+- `grpcurl -plaintext -d '{"name": "hsaki"}' localhost:8080 myapp.GreetingService.Hello`
+をたたくと正しくレスポンスかえってきた　
+```
+{
+  "message": "Hello, hsaki!"
+}
+```
+
+
 ## 自分用メモ
 ### HTTP/2とは
 - 簡潔にHTTP/2の特徴は以下
@@ -126,3 +193,6 @@ type GreetingServiceClient interface {
     - vscodeでprotocol buffersの拡張機能をインストールすると.protoファイルに色をつけられる
 ### シリアライズとは
 - シリアライズ(直列化)とは、複数の並列データを直列化して送信すること
+
+### Graceful Shutdown
+- アプリ停止の際にリクエストの受付を停止して、処理中のプロセスが完全に終わるまで待ってからアプリを終了すること
