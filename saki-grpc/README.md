@@ -174,7 +174,7 @@ reflection.Register(s)
 }
 ```
 
-
+### gRPCクライアント実装
 ## 自分用メモ
 ### HTTP/2とは
 - 簡潔にHTTP/2の特徴は以下
