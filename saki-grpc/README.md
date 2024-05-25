@@ -56,6 +56,58 @@ message HelloResponse {
 ```
 - string以外にもint, bool, enumなどprotobufにはいろいろ用意されている
 - 他にもGoogleが定義してパッケージとして公開した便利型の集合であるWell Known Typesというものもある
+### コード自動生成
+- gRPC通信を実装したgoのコードをprotoファイルから自動生成する
+- `protoc`コマンドを使う
+  - `brew install protoc`
+  - `brew install protoc-gen-go`
+  - `brew install protoc-gen-go-grpc`
+```
+protoc --go_out=../pkg/grpc --go_opt=paths=source_relative \
+	--go-grpc_out=../pkg/grpc --go-grpc_opt=paths=source_relative \
+	hello.proto
+```
+- オプションの説明は以下
+  - `--go_out` : hello.pb.goファイルの出力先
+  - `--go_opt` : hello.pb.goファイル生成時のオプション
+  - `--go-grpc_out` : hello_grpc.pb.goファイルの出力先
+  - `--go-grpc_opt` : hello_grpc.pb.goファイルの生成時オプション
+- このコマンドによって以下2つ生成される
+  - `hello.pb.go`:protoファイルから自動生成されたリクエスト/レスポンス型を定義した部分のコード
+    - 構造体とそのゲッターなどが作成される
+  - `hello_grpc.pb.go`:protoファイルから自動生成されたサービス部分のコード
+    - サーバーサイド用コードとクライアント用コードが作成される
+- サーバーサイド用コードは以下
+  - protoのserviceがgoのinterfaceになり、protoのrpcがgoのメソッドになっている
+  - `RegisterGreetingServiceServer`は第一引数で渡したServer上で第二引数で渡したgRPCサービスを動かすための関数
+```go
+// 生成されたGoのコード
+type GreetingServiceServer interface {
+	// サービスが持つメソッドの定義
+	Hello(context.Context, *HelloRequest) (*HelloResponse, error)
+	mustEmbedUnimplementedGreetingServiceServer()
+}
+
+func RegisterGreetingServiceServer(s grpc.ServiceRegistrar, srv GreetingServiceServer)
+```
+- クライアント用コードは以下
+```go
+// リクエストを送るクライアントを作るコンストラクタ
+func NewGreetingServiceClient(cc grpc.ClientConnInterface) GreetingServiceClient {
+	return &greetingServiceClient{cc}
+}
+
+// クライアントが呼び出せるメソッド一覧をインターフェースで定義
+type GreetingServiceClient interface {
+	Hello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloResponse, error)
+}
+
+```
+- 以下公式
+  - protoファイル上のメッセージ型がどんなgoの型になるのか
+    - https://protobuf.dev/reference/go/go-generated/
+  - protoファイル上のメソッド定義がどんなサーバー/クライアント用のコードになるのか
+    - https://grpc.io/docs/languages/go/generated-code/
 ## 自分用メモ
 ### HTTP/2とは
 - 簡潔にHTTP/2の特徴は以下
