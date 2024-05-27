@@ -25,18 +25,18 @@
 
 ## protoファイル書き方
 - proto2,proto3のバージョンが存在していて、proto3を使うには明示的にバージョン指定をする必要がある
-```
+```proto
 syntax = "proto3";
 ```
 - packageはGoと同じ扱い(他のprotoファイルで定義された型をパッケージ名.型名で参照可能)
-```
+```proto
 package myapp;
 ```
 - gRPCで呼び出そうとするProcedure(関数)をメソッド、そしてそのメソッドをいくつかまとめてひとくくりにしたものをサービスという
   - 以下の例では2つのことを行っている
     - 引数にHelloRequest型、戻り値にHelloResponse型を持つメソッドHelloを定義
     - Helloメソッド一つを持つGreetingServiceサービスを定義
-```
+```proto
 // サービスの定義
 service GreetingService {
 	// サービスが持つメソッドの定義
@@ -44,7 +44,7 @@ service GreetingService {
 }
 ```
 - 上記のHelloRequest, HelloResponse型を以下のように定義
-```
+```proto
 // 型の定義
 message HelloRequest {
 	string name = 1;
@@ -351,6 +351,111 @@ func HelloServerStream() {
 }
 ```
 - また、ストリームの終端は`Recv()`メソッドの返り値の2つ目のerrorがio.EOFの時である
+
+### クライアントストリーミングの実装
+- Client Streaming RPC : 複数リクエスト1レスポンス
+- protoファイルにメソッド追加
+```proto
+service GreetingService {
+	// サービスが持つメソッドの定義
+	rpc Hello (HelloRequest) returns (HelloResponse);
+	// サーバーストリーミングRPC
+	rpc HelloServerStream (HelloRequest) returns (stream HelloResponse);
+	// クライアントストリーミングRPC
+	rpc HelloClientStream (stream HelloRequest) returns (HelloResponse);
+}
+```
+- コードを自動生成するとサーバーサイドは以下のように生成される
+```go
+type GreetingServiceServer interface {
+	// サービスが持つメソッドの定義
+	Hello(context.Context, *HelloRequest) (*HelloResponse, error)
+	// サーバーストリーミングRPC
+	HelloServerStream(*HelloRequest, GreetingService_HelloServerStreamServer) error
+	// クライアントストリーミングRPC
+	HelloClientStream(GreetingService_HelloClientStreamServer) error
+	mustEmbedUnimplementedGreetingServiceServer()
+}
+
+type GreetingService_HelloClientStreamServer interface {
+	SendAndClose(*HelloResponse) error
+	Recv() (*HelloRequest, error)
+	grpc.ServerStream
+}
+```
+- Client Streaming RPCをUnary RPCと比較すると、引数がHelloRequest型ではなく、`GreetingService_HelloClientStreamServer`インターフェースになっていて、戻り値からHelloResponseが消えている
+- `GreetingService_HelloClientStreamServer`は`SendAndClose()`メソッドと`Recv()`メソッドを持つ
+- ビジネスロジックを記述すると以下
+```go
+func (s *myServer) HelloClientStream(stream hellopb.GreetingService_HelloClientStreamServer) error {
+	nameList := make([]string, 0)
+	for {
+		req, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			message := fmt.Sprintf("Hello, %v!", nameList)
+			return stream.SendAndClose(&hellopb.HelloResponse{
+				Message: message,
+			})
+		}
+		if err != nil {
+			return err
+		}
+		nameList = append(nameList, req.GetName())
+	}
+}
+```
+- このように`Recv()`を呼び出してリクエストを取得する
+- また、その返り値のerrorがio.EOFになっているときにストリーム終端
+- レスポンスは`SendAndClose()`の引数にHelloResponseを渡して返す
+- 動作確認:`grpcurl -plaintext -d '{"name": "hsaki"}{"name": "a-san"}{"name": "b-san"}{"name": "c-san"}{"name": "d-san"}' localhost:8080 myapp.GreetingService.HelloClientStream`
+```json
+{
+  "message": "Hello, [hsaki a-san b-san c-san d-san]!"
+}
+```
+- クライアントは以下のように生成されている
+```go
+type GreetingServiceClient interface {
+	// サービスが持つメソッドの定義
+	Hello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloResponse, error)
+	// サーバーストリーミングRPC
+	HelloServerStream(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (GreetingService_HelloServerStreamClient, error)
+	// クライアントストリーミングRPC
+	HelloClientStream(ctx context.Context, opts ...grpc.CallOption) (GreetingService_HelloClientStreamClient, error)
+}
+type GreetingService_HelloClientStreamClient interface {
+	Send(*HelloRequest) error
+	CloseAndRecv() (*HelloResponse, error)
+	grpc.ClientStream
+}
+```
+- この`Send()`と`CloseAndRecv()`を使って以下のようにかける
+```go
+// Unary RPCがリクエストを送るところ
+func Hello() {
+	// (一部抜粋)
+	// Helloメソッドの実行
+	res, err := client.Hello(context.Background(), req)
+}
+
+// Client Stream RPCがリクエストを送るところ
+func HelloClientStream() {
+	// (一部抜粋)
+	// サーバーに複数回リクエストを送るためのストリームを得る
+	stream, err := client.HelloClientStream(context.Background())
+
+	for i := 0; i < sendCount; i++ {
+		// ストリームを通じてリクエストを送信
+		stream.Send(&hellopb.HelloRequest{
+			Name: name,
+		})
+	}
+  // ストリームからレスポンスを得る
+	res, err := stream.CloseAndRecv()
+}
+```
+
+
 ## 自分用メモ
 ### HTTP/2とは
 - 簡潔にHTTP/2の特徴は以下
