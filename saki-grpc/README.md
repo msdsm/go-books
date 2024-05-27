@@ -175,6 +175,63 @@ reflection.Register(s)
 ```
 
 ### gRPCクライアント実装
+- gRPCurlコマンドを使わずにプログラムからgRPCサーバーにリクエストを送る
+- gRPCのコネクションを得るには`grpc.Dial()`関数を使う
+```go
+conn, err := grpc.Dial(
+	address,
+
+	grpc.WithTransportCredentials(insecure.NewCredentials()),
+	grpc.WithBlock(),
+)
+```
+- 第一引数にgRPCのサーバーアドレスを渡す
+  - 第二引数以降はオプション
+  - `grpc.WithTransportCredentials(insecure.NewCredentials())` : SSL/TSLを使用しない
+  - `grpc.WithBlock()` : コネクションが確立されるまで待機する(同期)
+- `hello_grpc.pb.go`で生成された`NewGreetingServiceClient`を使用してクライアントを作成
+```go
+client = hellopb.NewGreetingServiceClient(conn)
+```
+- `hello_grpc.pb.go`を見ると以下のようにクライアントはサービスの`Hello`メソッドにリクエストを送信するための`Hello`メソッドを持つことがわかる
+```go
+type GreetingServiceClient interface {
+	// サービスが持つメソッドの定義
+	Hello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloResponse, error)
+}
+
+type greetingServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewGreetingServiceClient(cc grpc.ClientConnInterface) GreetingServiceClient {
+	return &greetingServiceClient{cc}
+}
+
+func (c *greetingServiceClient) Hello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloResponse, error) {
+	out := new(HelloResponse)
+	err := c.cc.Invoke(ctx, GreetingService_Hello_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+```
+- これを使用してリクエストを送信できる
+```go
+// リクエストに使うHelloRequest型の生成
+req := &hellopb.HelloRequest{
+	Name: name,
+}
+// Helloメソッドの実行 -> HelloResponse型のレスポンスresを入手
+res, err := client.Hello(context.Background(), req)
+if err != nil {
+	fmt.Println(err)
+} else {
+	// resの内容を標準出力に出す
+	fmt.Println(res.GetMessage())
+}
+```
 ## 自分用メモ
 ### HTTP/2とは
 - 簡潔にHTTP/2の特徴は以下
