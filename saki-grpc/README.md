@@ -56,7 +56,7 @@ message HelloResponse {
 ```
 - string以外にもint, bool, enumなどprotobufにはいろいろ用意されている
 - 他にもGoogleが定義してパッケージとして公開した便利型の集合であるWell Known Typesというものもある
-### コード自動生成
+## コード自動生成
 - gRPC通信を実装したgoのコードをprotoファイルから自動生成する
 - `protoc`コマンドを使う
   - `brew install protoc`
@@ -110,7 +110,7 @@ type GreetingServiceClient interface {
     - https://grpc.io/docs/languages/go/generated-code/
 
 
-### gRPCサーバー実装
+## gRPCサーバー実装
 - `src/cmd/server/main.go`にあるように`grpc.NewServer()`でgRPCサーバーを作成できる
 ```go
 // 2. gRPCサーバーを作成
@@ -174,7 +174,7 @@ reflection.Register(s)
 }
 ```
 
-### gRPCクライアント実装
+## gRPCクライアント実装
 - gRPCurlコマンドを使わずにプログラムからgRPCサーバーにリクエストを送る
 - gRPCのコネクションを得るには`grpc.Dial()`関数を使う
 ```go
@@ -233,7 +233,7 @@ if err != nil {
 }
 ```
 
-### ストリーミング処理
+## ストリーミング処理
 - gRPCで可能な4種類の通信方式
   - Unary RPC
     - 1リクエスト1レスポンスの通信方式
@@ -247,7 +247,7 @@ if err != nil {
     - サーバー・クライアントともに任意のタイミングでリクエスト・レスポンスを送ることができる通信方式
 
 
-### サーバーストリーミングの実装
+## サーバーストリーミングの実装
 - server streaming RPC : 1リクエスト複数レスポンス
 - protoファイルにサーバーストリーミングのメソッド記述
 ```proto
@@ -352,7 +352,7 @@ func HelloServerStream() {
 ```
 - また、ストリームの終端は`Recv()`メソッドの返り値の2つ目のerrorがio.EOFの時である
 
-### クライアントストリーミングの実装
+## クライアントストリーミングの実装
 - Client Streaming RPC : 複数リクエスト1レスポンス
 - protoファイルにメソッド追加
 ```proto
@@ -455,7 +455,129 @@ func HelloClientStream() {
 }
 ```
 
+## 双方向ストリーミングの実装
+- Bidirectional streaming RPC : 複数リクエスト複数レスポンス
+- protoファイル定義
+```proto
+service GreetingService {
+	// サービスが持つメソッドの定義
+	rpc Hello (HelloRequest) returns (HelloResponse);
+	// サーバーストリーミングRPC
+	rpc HelloServerStream (HelloRequest) returns (stream HelloResponse);
+	// クライアントストリーミングRPC
+	rpc HelloClientStream (stream HelloRequest) returns (HelloResponse);
+	// 双方向ストリーミングRPC
+	rpc HelloBiStreams (stream HelloRequest) returns (stream HelloResponse);
+}
+```
+- サーバーサイドで以下のコードが生成される
+```go
+type GreetingServiceServer interface {
+	// サービスが持つメソッドの定義
+	Hello(context.Context, *HelloRequest) (*HelloResponse, error)
+	// サーバーストリーミングRPC
+	HelloServerStream(*HelloRequest, GreetingService_HelloServerStreamServer) error
+	// クライアントストリーミングRPC
+	HelloClientStream(GreetingService_HelloClientStreamServer) error
+	// 双方向ストリーミングRPC
+	HelloBiStreams(GreetingService_HelloBiStreamsServer) error
+	mustEmbedUnimplementedGreetingServiceServer()
+}
+type GreetingService_HelloBiStreamsServer interface {
+	Send(*HelloResponse) error
+	Recv() (*HelloRequest, error)
+	grpc.ServerStream
+}
+```
+- ビジネスロジックの実装は、`Send()`メソッドと`Recv()`メソッドを用いてServer Streaming, Client Streamingと同じ様にかける
+```go
+func (s *myServer) HelloBiStreams(stream hellopb.GreetingService_HelloBiStreamsServer) error {
+	for {
+		req, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		message := fmt.Sprintf("Hello, %v!", req.GetName())
+		if err := stream.Send(&hellopb.HelloResponse{
+			Message: message,
+		}); err != nil {
+			return err
+		}
+	}
+}
+```
+- clientは以下の様に生成されている
+```go
+type GreetingServiceClient interface {
+	// サービスが持つメソッドの定義
+	Hello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloResponse, error)
+	// サーバーストリーミングRPC
+	HelloServerStream(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (GreetingService_HelloServerStreamClient, error)
+	// クライアントストリーミングRPC
+	HelloClientStream(ctx context.Context, opts ...grpc.CallOption) (GreetingService_HelloClientStreamClient, error)
+	// 双方向ストリーミングRPC
+	HelloBiStreams(ctx context.Context, opts ...grpc.CallOption) (GreetingService_HelloBiStreamsClient, error)
+}
+type GreetingService_HelloBiStreamsClient interface {
+	Send(*HelloRequest) error
+	Recv() (*HelloResponse, error)
+	grpc.ClientStream
+}
+```
+- clientも同じ様に`Send()`, `Recv()`メソッドを用いて実装するが、送信の終端に達した時は`CloseSend()`メソッドを使用する
+  - `CloseSend()`は`grpc.ClientStream`インターフェース由来のメソッド
+```go
+func HelloBiStreams() {
+	stream, err := client.HelloBiStreams(context.Background())
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 
+	sendNum := 5
+	fmt.Printf("Please enter %d names.\n", sendNum)
+
+	var sendEnd, recvEnd bool
+	sendCount := 0
+	for !(sendEnd && recvEnd) {
+		// 送信処理
+		if !sendEnd {
+			scanner.Scan()
+			name := scanner.Text()
+
+			sendCount++
+			if err := stream.Send(&hellopb.HelloRequest{
+				Name: name,
+			}); err != nil {
+				fmt.Println(err)
+				sendEnd = true
+			}
+
+			if sendCount == sendNum {
+				sendEnd = true
+				if err := stream.CloseSend(); err != nil {
+					fmt.Println(err)
+				}
+			}
+		}
+
+		// 受信処理
+		if !recvEnd {
+			if res, err := stream.Recv(); err != nil {
+				if !errors.Is(err, io.EOF) {
+					fmt.Println(err)
+				}
+				recvEnd = true
+			} else {
+				fmt.Println(res.GetMessage())
+			}
+		}
+	}
+}
+```
 ## 自分用メモ
 ### HTTP/2とは
 - 簡潔にHTTP/2の特徴は以下
