@@ -246,6 +246,111 @@ if err != nil {
   - Bidirectional streaming RPC
     - サーバー・クライアントともに任意のタイミングでリクエスト・レスポンスを送ることができる通信方式
 
+
+### サーバーストリーミングの実装
+- server streaming RPC : 1リクエスト複数レスポンス
+- protoファイルにサーバーストリーミングのメソッド記述
+```proto
+service GreetingService {
+	// サービスが持つメソッドの定義
+	rpc Hello (HelloRequest) returns (HelloResponse);
+	// サーバーストリーミングRPC
+	rpc HelloServerStream (HelloRequest) returns (stream HelloResponse);
+}
+```
+- コードを自動生成すると、`GreetingServiceServer`インターフェースにメソッドが追加されている
+```go
+type GreetingServiceServer interface {
+	// サービスが持つメソッドの定義
+	Hello(context.Context, *HelloRequest) (*HelloResponse, error)
+	// サーバーストリーミングRPC
+	HelloServerStream(*HelloRequest, GreetingService_HelloServerStreamServer) error
+	mustEmbedUnimplementedGreetingServiceServer()
+}
+```
+- 返り値のHelloResponseが消えて第二引数にインターフェースが加わっていることがわかる
+```go
+// 自動生成された、サーバーストリーミングのためのインターフェース(for サーバー)
+type GreetingService_HelloServerStreamServer interface {
+	Send(*HelloResponse) error
+	grpc.ServerStream
+}
+```
+- ビジネスロジックを実装すると以下
+```go
+func (s *myServer) HelloServerStream(req *hellopb.HelloRequest, stream hellopb.GreetingService_HelloServerStreamServer) error {
+	resCount := 5
+	for i := 0; i < resCount; i++ {
+		if err := stream.Send(&hellopb.HelloResponse{
+			Message: fmt.Sprintf("[%d] Hello, %s!", i, req.GetName()),
+		}); err != nil {
+			return err
+		}
+		time.Sleep(time.Second * 1)
+	}
+	return nil // ストリームの終わり
+}
+```
+- このようにUnary RPCは直接レスポンスを関数の返り値として返していたが、Server Streaming RPCでは第二引数のインターフェースのSendメソッドを用いてレスポンスを渡している
+  - Sendメソッドの引数にHelloResponseを渡している
+- また、ストリームの終端はHelloServerStreamメソッドをreturn文で終わらせることで実現できる
+- 実際に`grpcurl -plaintext -d '{"name": "hsaki"}' localhost:8080 myapp.GreetingService.HelloServerStream`を叩くと以下の様にServer Streamingを実現できていることがわかる(1リクエスト5レスポンス)
+```json
+{
+  "message": "[0] Hello, hsaki!"
+}
+{
+  "message": "[1] Hello, hsaki!"
+}
+{
+  "message": "[2] Hello, hsaki!"
+}
+{
+  "message": "[3] Hello, hsaki!"
+}
+{
+  "message": "[4] Hello, hsaki!"
+}
+```
+- grpcurlを使わずにサーバーにリクエストを送信するクライアントコードを実装する方法は以下
+- 自動生成されたコードは以下のようになっている
+```go
+type GreetingServiceClient interface {
+	// サービスが持つメソッドの定義
+	Hello(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (*HelloResponse, error)
+	// サーバーストリーミングRPC
+	HelloServerStream(ctx context.Context, in *HelloRequest, opts ...grpc.CallOption) (GreetingService_HelloServerStreamClient, error)
+}
+
+type GreetingService_HelloServerStreamClient interface {
+	Recv() (*HelloResponse, error)
+	grpc.ClientStream
+}
+```
+- メソッドの返り値がHelloResponseではなく、`GreetingService_HelloServerStreamClient`インターフェースになっていることがわかる
+  - この`Recv()`メソッドがHelloResponseを返している
+- そのため、Unary RPCとは異なりServer Stream RPCでは以下のように記述
+```go
+// Unary RPCがレスポンスを受け取るところ
+func Hello() {
+	// (一部抜粋)
+	// Helloメソッドの実行 -> HelloResponse型のレスポンスresを入手
+	res, err := client.Hello(context.Background(), req)
+}
+
+// Server Stream RPCがレスポンスを受け取るところ
+func HelloServerStream() {
+	// (一部抜粋)
+	// サーバーから複数回レスポンスを受け取るためのストリームを得る
+	stream, err := client.HelloServerStream(context.Background(), req)
+
+	for {
+		// ストリームからレスポンスを得る
+		res, err := stream.Recv()
+	}
+}
+```
+- また、ストリームの終端は`Recv()`メソッドの返り値の2つ目のerrorがio.EOFの時である
 ## 自分用メモ
 ### HTTP/2とは
 - 簡潔にHTTP/2の特徴は以下
