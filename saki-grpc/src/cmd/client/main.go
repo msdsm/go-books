@@ -11,8 +11,10 @@ import (
 
 	hellopb "mygrpc/pkg/grpc"
 
+	_ "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 var (
@@ -44,7 +46,7 @@ func main() {
 	client = hellopb.NewGreetingServiceClient(conn)
 
 	for {
-		fmt.Println("1: send Request")
+		fmt.Println("1: Hello")
 		fmt.Println("2: HelloServerStream")
 		fmt.Println("3: HelloClientStream")
 		fmt.Println("4: HelloBiStream")
@@ -82,6 +84,11 @@ func Hello() {
 	res, err := client.Hello(context.Background(), req)
 	if err != nil {
 		fmt.Println(err)
+		if stat, ok := status.FromError(err); ok {
+			fmt.Printf("code: %s\n", stat.Code())
+			fmt.Printf("message: %s\n", stat.Message())
+			fmt.Printf("details: %s\n", stat.Details())
+		}
 	} else {
 		fmt.Println(res.GetMessage())
 	}

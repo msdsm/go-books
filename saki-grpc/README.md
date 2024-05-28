@@ -578,6 +578,74 @@ func HelloBiStreams() {
 	}
 }
 ```
+
+## gRPCのステータスコード
+- gRPCではメソッドの呼び出しに成功した場合には中で何が起きてもHTTPレスポンスステータスコードは200を返す
+- gRPCでは独自のエラ〜コードが17個ある
+  - 0  : OK               	: 正常
+  - 1  : Canceled         	: 処理がキャンセルされた
+  - 2  : Unknown          	: 不明なエラー
+  - 3  : InvalidArgument  	: 無効な引数でメソッドを呼び出した
+  - 4  : DeadlineExceeded 	: タイムアウト
+  - 5  : NotFound         	: 要求されたエンティティが存在しなかった
+  - 6  : AlreadyExists	  	: 既に存在しているエンティティを作成するようなリクエストだったため失敗
+  - 7  : PermissionDenied 	: そのメソッドを実行するための権限がない
+  - 8  : ResourceExhausted	: リクエストを処理するためのquotaが枯渇した
+  - 9  : FailedPrecondition : 処理を実行できる状態ではないためリクエストが拒否された (例: 中身があるディレクトリをrmdirしようとした)
+  - 10 : Aborted	        : トランザクションがコンフリクトしたなどして、処理が異常終了させられた
+  - 11 : OutOfRange	        : 有効範囲外の操作をリクエストされた (例: ファイルサイズを超えたオフセットからのreadを指示された)
+  - 12 : Unimplemented	    : サーバーに実装されていないサービス・メソッドを呼び出そうとした
+  - 13 : Internal	        : サーバー内で重大なエラーが発生した
+  - 14 : Unavailable	    : メソッドを実行するための用意ができていない
+  - 15 : DataLoss	        : NWの問題で伝送中にパケットが失われた
+  - 16 : Unauthenticated	: ユーザー認証に失敗した
+  - https://grpc.io/docs/guides/error/#error-status-codes
+- `google.golang.org/grpc/status`パッケージを用意して以下の様にerrorの作成ができる
+```go
+err := status.Error(codes.Unknown, "unknown error occurred")
+```
+- 動作確認として`grpcurl -plaintext -d '{"name": "hsaki"}' localhost:8080 myapp.GreetingService.Hello`をたたくと以下のように返ってくる
+```
+ERROR:
+  Code: Unknown
+  Message: unknown error occurred
+```
+- `status.Error()`はコードと文字列からerrorを作成するがその逆変換が`status.FromError()`
+```go
+func FromError(err error) (s *Status, ok bool)
+```
+- この返り値の`Code()`, `Message()`メソッドを使って取り出せる
+```go
+if stat, ok := status.FromError(err); ok {
+	fmt.Printf("code: %s\n", stat.Code())
+	fmt.Printf("message: %s\n", stat.Message())
+}
+```
+- gRPCで返すerrorではcode,messageに加えてdetailsフィールドもあり、以下のようにかける
+	1. `status.New()`でステータス型の作成
+	2. `WithDetails()`でステータス型に詳細情報を付加
+	3. ステータス型の`Err()`でエラー生成
+```go
+stat := status.New(codes.Unknown, "unknown error occurred")
+stat, _ = stat.WithDetails(&errdetails.DebugInfo{
+	Detail: "detail reason of err",
+})
+err := stat.Err()
+```
+- grpcurlを叩くと以下の様になる
+```
+ERROR:
+  Code: Unknown
+  Message: unknown error occurred
+  Details:
+  1)    {
+          "@type": "type.googleapis.com/google.rpc.DebugInfo",
+          "detail": "detail reason of err"
+        }
+```
+- またクライアントの方では上述の`FromError`の返り値のステータス型から`Details()`メソッドでdetailを取り出せる
+  - Server側でDetailの作成はprotoファイルを元にしている(errdetails.DebugInfoはprotoファイルから自動生成されたコードのパッケージ)なのでdetailのメッセージ型をでシリアライズするためにclient側で`"google.golang.org/genproto/googleapis/rpc/errdetails"`をimportする必要がある
+
 ## 自分用メモ
 ### HTTP/2とは
 - 簡潔にHTTP/2の特徴は以下
