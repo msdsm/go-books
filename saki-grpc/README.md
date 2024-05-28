@@ -646,6 +646,9 @@ ERROR:
 - またクライアントの方では上述の`FromError`の返り値のステータス型から`Details()`メソッドでdetailを取り出せる
   - Server側でDetailの作成はprotoファイルを元にしている(errdetails.DebugInfoはprotoファイルから自動生成されたコードのパッケージ)なのでdetailのメッセージ型をでシリアライズするためにclient側で`"google.golang.org/genproto/googleapis/rpc/errdetails"`をimportする必要がある
 
+
+## インターセプタ
+- gRPCでは、ハンドラ処理の前後に追加処理を挟むミドルウェアのことをインターセプタと呼ぶ
 ## 自分用メモ
 ### HTTP/2とは
 - 簡潔にHTTP/2の特徴は以下

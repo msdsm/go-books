@@ -13,11 +13,8 @@ import (
 
 	hellopb "mygrpc/pkg/grpc"
 
-	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
-	"google.golang.org/grpc/status"
 )
 
 type myServer struct {
@@ -25,27 +22,27 @@ type myServer struct {
 }
 
 func (s *myServer) Hello(ctx context.Context, req *hellopb.HelloRequest) (*hellopb.HelloResponse, error) {
-	/*
-		// リクエストからnameを取り出す
-		// "Hello, [名前]!"というレスポンスを返す
-		return &hellopb.HelloResponse{
-			Message: fmt.Sprintf("Hello, %s!", req.GetName()),
-		}, nil
-	*/
+
+	// リクエストからnameを取り出す
+	// "Hello, [名前]!"というレスポンスを返す
+	return &hellopb.HelloResponse{
+		Message: fmt.Sprintf("Hello, %s!", req.GetName()),
+	}, nil
 
 	/*
 		// error返す
 		err := status.Error(codes.Unknown, "unknown error occurred")
 	*/
 
-	// gRPCステータスのdetailsフィールドの利用
-	stat := status.New(codes.Unknown, "unknown error occurred")
-	stat, _ = stat.WithDetails(&errdetails.DebugInfo{
-		Detail: "detail reason of err",
-	})
-	err := stat.Err()
-	return nil, err
-
+	/*
+		// gRPCステータスのdetailsフィールドの利用
+		stat := status.New(codes.Unknown, "unknown error occurred")
+		stat, _ = stat.WithDetails(&errdetails.DebugInfo{
+			Detail: "detail reason of err",
+		})
+		err := stat.Err()
+		return nil, err
+	*/
 }
 
 // HelloServerStreamメソッドのビジネスロジック実装
@@ -113,7 +110,20 @@ func main() {
 	}
 
 	// 2. gRPCサーバーを作成
-	s := grpc.NewServer()
+	s := grpc.NewServer(
+		/*
+			grpc.ChainUnaryInterceptor(
+				myUnaryServerInterceptor1,
+				myUnaryServerInterceptor2,
+			),
+		*/
+		grpc.ChainStreamInterceptor(
+			myStreamServerInterceptor1,
+			myStreamServerInterceptor2,
+		),
+		//grpc.UnaryInterceptor(myUnaryServerInterceptor1),
+		//grpc.StreamInterceptor(myStreamServerInterceptor1),
+	)
 
 	// 3. gRPCサーバーにGreetingServiceを登録
 	hellopb.RegisterGreetingServiceServer(s, NewMyServer())
