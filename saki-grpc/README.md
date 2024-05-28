@@ -649,6 +649,113 @@ ERROR:
 
 ## インターセプタ
 - gRPCでは、ハンドラ処理の前後に追加処理を挟むミドルウェアのことをインターセプタと呼ぶ
+- Unary RPCとStreaming RPCでInterceptorの引数の型が異なる
+### Unary Interceptor
+- 以下のように前処理と後処理を記述できる
+```go
+func myUnaryServerInterceptor1(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+	log.Println("[pre] my unary server interceptor 1: ", info.FullMethod) // ハンドラの前に割り込ませる前処理
+	res, err := handler(ctx, req) // 本来の処理
+	log.Println("[post] my unary server interceptor 1: ", m) // ハンドラの後に割り込ませる後処理
+	return res, err
+}
+```
+- 以下のようにサーバーに導入できる
+```go
+s := grpc.NewServer(
+	grpc.UnaryInterceptor(myUnaryServerInterceptor1),
+)
+```
+
+### Stream RPCのInterceptor
+```go
+func myStreamServerInterceptor1(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	// ストリームがopenされたときに行われる前処理
+	log.Println("[pre stream] my stream server interceptor 1: ", info.FullMethod)
+
+	err := handler(srv, &myServerStreamWrapper1{ss}) // 本来のストリーム処理
+
+	// ストリームがcloseされるときに行われる後処理
+	log.Println("[post stream] my stream server interceptor 1: ")
+	return err
+}
+
+type myServerStreamWrapper1 struct {
+	grpc.ServerStream
+}
+
+func (s *myServerStreamWrapper1) RecvMsg(m interface{}) error {
+	// ストリームから、リクエストを受信
+	err := s.ServerStream.RecvMsg(m)
+	// 受信したリクエストを、ハンドラで処理する前に差し込む前処理
+	if !errors.Is(err, io.EOF) {
+		log.Println("[pre message] my stream server interceptor 1: ", m)
+	}
+	return err
+}
+
+func (s *myServerStreamWrapper1) SendMsg(m interface{}) error {
+	// ハンドラで作成したレスポンスを、ストリームから返信する直前に差し込む後処理
+	log.Println("[post message] my stream server interceptor 1: ", m)
+	return s.ServerStream.SendMsg(m)
+}
+```
+- ストリーミングRPCでは以下のような処理になる
+  - ストリームをopenする
+  - 以下を繰り返す
+    - ストリームからリクエストを受信
+    - ハンドラ内で、リクエストに対するレスポンスを生成
+    - ストリームを通じてレスポンスを送信
+  - ストリームをclose
+- そのため、前処理・後処理といってもストリームopen/closeのときの処理なのか、ストリームから実際にデータを送受信するときの処理なのかという選択肢が生まれる
+- ストリームopen/closeに着目した前処理・後処理はUnary RPCと同様にhandlerの前後に書く
+```go
+func myStreamServerInterceptor1(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	// 前処理をここに書く
+
+	err := handler(srv, &myServerStreamWrapper1{ss}) // 本来のストリーム処理
+
+	// 後処理をここに書く
+
+	return err
+}
+```
+- 送受信に着目した前処理・後処理は、`grpc.ServerStream`インターフェース型の`RecvMsg`, `SendMsg`メソッドで行われる
+- そのため、リクエスト受信時・レスポンス送信時に自分のやりたい処理を入れ込むには以下をやる
+  - `grpc.ServerStream`インターフェース型を満たす独自構造体を作成
+  - 独自構造体の`RecvMsg`,`SendMsg`メソッドを自分がやりたい処理を入れ込む形でオーバーライド
+- Streaming RPCのインターセプタは以下の様に導入できる
+```go
+s := grpc.NewServer(
+	grpc.StreamInterceptor(myStreamServerInterceptor1),
+)
+```
+- また、複数個のインターセプタを導入することもできる
+```go
+// Unary RPC
+s := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(
+			myUnaryServerInterceptor1,
+			myUnaryServerInterceptor2,
+		),
+	)
+```
+```go
+// Streaming RPC
+s := grpc.NewServer(
+	grpc.ChainStreamInterceptor(
+		myStreamServerInterceptor1,
+		myStreamServerInterceptor2,
+	),
+)
+```
+- このときインターセプタの実行順序は以下のようになる(前処理は記述順、後処理は逆順)
+	1. インターセプタ1の前処理
+	2. インターセプタ2の前処理
+	3. ハンドラによる本処理
+	4. インターセプタ2の後処理
+	5. インターセプタ1の後処理
+
 ## 自分用メモ
 ### HTTP/2とは
 - 簡潔にHTTP/2の特徴は以下
