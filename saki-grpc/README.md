@@ -647,10 +647,10 @@ ERROR:
   - Server側でDetailの作成はprotoファイルを元にしている(errdetails.DebugInfoはprotoファイルから自動生成されたコードのパッケージ)なのでdetailのメッセージ型をでシリアライズするためにclient側で`"google.golang.org/genproto/googleapis/rpc/errdetails"`をimportする必要がある
 
 
-## インターセプタ
+## インターセプタ(サーバーサイド)
 - gRPCでは、ハンドラ処理の前後に追加処理を挟むミドルウェアのことをインターセプタと呼ぶ
 - Unary RPCとStreaming RPCでInterceptorの引数の型が異なる
-### Unary Interceptor
+### Unary RPCのInterceptor
 - 以下のように前処理と後処理を記述できる
 ```go
 func myUnaryServerInterceptor1(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
@@ -730,7 +730,8 @@ s := grpc.NewServer(
 	grpc.StreamInterceptor(myStreamServerInterceptor1),
 )
 ```
-- また、複数個のインターセプタを導入することもできる
+### 複数のInterceptor
+複数個のインターセプタを導入することもできる
 ```go
 // Unary RPC
 s := grpc.NewServer(
@@ -755,6 +756,144 @@ s := grpc.NewServer(
 	3. ハンドラによる本処理
 	4. インターセプタ2の後処理
 	5. インターセプタ1の後処理
+
+## インターセプタ(クライアントサイド)
+- サーバーと同じことをクライアントでもできる
+- クライアントがリクエストを送信する前、レスポンスを受信する前に処理を挟める
+### Unary RPCのInterceptor
+- grpcパッケージで以下のような形であるべきと定められている
+```go
+type UnaryClientInterceptor func(ctx context.Context, method string, req, reply interface{}, cc *ClientConn, invoker UnaryInvoker, opts ...CallOption) error
+```
+- Unary RPCのInterceptorは以下のように実装できる
+```go
+func myUnaryClientInteceptor1(ctx context.Context, method string, req, res interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+	fmt.Println("[pre] my unary client interceptor 1", method, req) // リクエスト送信前に割り込ませる前処理
+	err := invoker(ctx, method, req, res, cc, opts...) // 本来のリクエスト
+	fmt.Println("[post] my unary client interceptor 1", res) // リクエスト送信後に割り込ませる後処理
+	return err
+}
+```
+- このInterceptorは以下のように導入できる
+```go
+conn, err := grpc.Dial(
+		address,
+		grpc.WithUnaryInterceptor(myUnaryClientInteceptor1), // ここ
+
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
+	)
+```
+### Stream RPCのInterceptor
+- 以下のように定められている
+```go
+type StreamClientInterceptor func(ctx context.Context, desc *StreamDesc, cc *ClientConn, method string, streamer Streamer, opts ...CallOption) (ClientStream, error)
+```
+- これを用いて以下のように実装できる
+```go
+func myStreamClientInterceptor1(
+	ctx context.Context,
+	desc *grpc.StreamDesc,
+	cc *grpc.ClientConn,
+	method string,
+	streamer grpc.Streamer,
+	opts ...grpc.CallOption,
+) (grpc.ClientStream, error) {
+	// ストリームがopenされる前に行われる前処理
+	log.Println("[pre] my stream client interceptor 1", method)
+
+	stream, err := streamer(ctx, desc, cc, method, opts...)
+	return &myClientStreamWrapper1{stream}, err
+}
+
+type myClientStreamWrapper1 struct {
+	grpc.ClientStream
+}
+
+func (s *myClientStreamWrapper1) SendMsg(m interface{}) error {
+	// リクエスト送信前に割り込ませる前処理
+	log.Println("[pre message] my stream client interceptor 1: ", m)
+
+	// リクエスト送信
+	return s.ClientStream.SendMsg(m)
+}
+
+func (s *myClientStreamWrapper1) RecvMsg(m interface{}) error {
+	err := s.ClientStream.RecvMsg(m) // レスポンス受信処理
+
+	// レスポンス受信後に割り込ませる後処理
+	if !errors.Is(err, io.EOF) {
+		log.Println("[post message] my stream client interceptor 1: ", m)
+	}
+	return err
+}
+
+func (s *myClientStreamWrapper1) CloseSend() error {
+	err := s.ClientStream.CloseSend() // ストリームをclose
+
+	// ストリームがcloseされた後に行われる後処理
+	log.Println("[post] my stream client interceptor 1")
+	return err
+}
+```
+- まず、ストリームopen前の処理はInterceptor関数の中にかく
+- クライアントInterceptorは返り値として`grpc.ClientStream`を返し、この返り値で得られるClientStreamは以下のように定義されている
+```go
+type ClientStream interface {
+	// (一部抜粋)
+	SendMsg(m interface{}) error
+	RecvMsg(m interface{}) error
+	CloseSend() error
+}
+```
+- 上から順に、リクエスト送信、レスポンス受信、ストリームclose処理である
+- そのため、これらの前後に処理を割り込ませるために、独自のクライアントストリム構造体(Wrapper)を作ってメソッドをオーバーライドさせる
+- Stream Interceptorは以下のように導入できる
+```go
+func main() {
+	conn, err := grpc.Dial(
+		address,
+		grpc.WithStreamInterceptor(myStreamClientInteceptor1), // ここ
+
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithBlock(),
+	)
+}
+```
+### 複数のInterceptor
+- Unary RPCの場合
+```go
+conn, err := grpc.Dial(
+	address,
+	// これ
+	grpc.WithChainUnaryInterceptor(
+		myUnaryClientInteceptor1,
+		myUnaryClientInteceptor2,
+	),
+	grpc.WithTransportCredentials(insecure.NewCredentials()),
+	grpc.WithBlock(),
+)
+```
+- Stream RPCの場合
+```go
+conn, err := grpc.Dial(
+	address,
+	// これ
+	grpc.WithChainStreamInterceptor(
+		myStreamClientInteceptor1,
+		myStreamClientInteceptor2,
+	),
+	grpc.WithTransportCredentials(insecure.NewCredentials()),
+	grpc.WithBlock(),
+)
+```
+- また、処理の順序についてはサーバーサイドと同じく以下のようになる
+	1. インターセプタ1の前処理
+	2. インターセプタ2の前処理
+	3. ハンドラによる本処理
+	4. インターセプタ2の後処理
+	5. インターセプタ1の後処理
+
 
 ## 自分用メモ
 ### HTTP/2とは
