@@ -894,6 +894,114 @@ conn, err := grpc.Dial(
 	4. インターセプタ2の後処理
 	5. インターセプタ1の後処理
 
+## メタデータ送受信
+- HTTPの場合はヘッダーフィールドに付与
+- gRPCではメタデータを使用
+### クライアント -> サーバーへのメタデータ送受信
+- クライアントからメタデータを送信するには、以下のように`metadata.New()`に`map[string]string`を渡して生成したメタデータを`metadata.NewOutgoingContext()`を使ってコンテキストに付与する
+```go
+// unary
+ctx := context.Background()
+md := metadata.New(map[string]string{"type": "unary", "from": "client"}) // メタデータ生成
+ctx = metadata.NewOutgoingContext(ctx, md)                               // contextに付与
+res, err := client.Hello(ctx, req)
+
+// stream
+ctx := context.Background()
+md := metadata.New(map[string]string{"type": "stream", "from": "client"})
+ctx = metadata.NewOutgoingContext(ctx, md)
+stream, err := client.HelloBiStreams(ctx)
+```
+- サーバー側でメタデータを受信するには、`metadata.FromIncomingContext()`にコンテキストを渡せばよい
+  - unaryの場合は引数にcontextがあるからそのまま使える
+  - streamの場合は、`stream.Context()`でcontextを取得できる
+```go
+// Unary
+if md, ok := metadata.FromIncomingContext(ctx); ok {
+	log.Println(md)
+}
+
+// stream
+if md, ok := metadata.FromIncomingContext(stream.Context()); ok {
+	log.Println(md)
+}
+```
+- unary, streamそれぞれで動作確認するとサーバー側で以下のように出力される
+```
+2024/06/07 14:13:40 MD{type=[unary], content-type=[application/grpc], user-agent=[grpc-go/1.64.0], :authority=[localhost:8080], from=[client]}
+
+2024/06/07 14:14:18 MD{user-agent=[grpc-go/1.64.0], :authority=[localhost:8080], content-type=[application/grpc], from=[client], type=[stream]}
+```
+### サーバー -> クライアントへのメタデータ送受信
+- メタデータはヘッダーに含めてやりとりする
+- HTTP/2ではヘッダーフレームを分割して送ることができ、最初のヘッダーフレームのことをヘッダー、最後のヘッダーフレームのことをトレーラーという
+- ヘッダーとトレーラーでメタデータを送る
+- Unary RPCでサーバーからヘッダーとトレーラでメタデータを送るには、`grpc.SetHeader()`と`grpc.SetTrailer()`を使う
+```go
+headerMD := metadata.New(map[string]string{"type": "unary", "from": "server", "in": "header"})
+if err := grpc.SetHeader(ctx, headerMD); err != nil {
+	return nil, err
+}
+trailerMD := metadata.New(map[string]string{"type": "unary", "from": "server", "in": "trailer"})
+if err := grpc.SetTrailer(ctx, trailerMD); err != nil {
+	return nil, err
+}
+```
+- `grpc.SetHeader()`と`grpc.SetTrailer()`でセットされたメタデータはハンドラがreturnされてステータスコードが送信されるときに同時に送信される
+- Stream RPCでサーバーからメタデータを送信する場合は以下のように`grpc.SendHeder()`, `grpc.SetHeader()`, `grpc.SetTrailer()`を使用できる
+```go
+// すぐに送信したい場合
+headerMD := metadata.New(map[string]string{"type": "stream", "from": "server", "in": "header"})
+if err := stream.SendHeader(headerMD); err != nil {
+	return err
+}
+
+// 本来ヘッダーを送るタイミングで送る場合
+if err := stream.SetHeader(headerMD); err != nil {
+	return err
+}
+
+// trailer
+trailerMD := metadata.New(map[string]string{"type": "stream", "from": "server", "in": "trailer"})
+stream.SetTrailer(trailerMD)
+```
+- Unary RPCでクライアント側がメタデータを取り出すには、メソッドを呼び出す際に以下のようにする
+```go
+var header, trailer metadata.MD
+res, err := client.Hello(ctx, req, grpc.Header(&header), grpc.Trailer(&trailer)) // ここ
+if err != nil {
+	// (略)
+} else {
+	fmt.Println(header)
+	fmt.Println(trailer)
+	fmt.Println(res.GetMessage())
+}
+```
+- Stream RPCでクライアント側がメタデータを取り出すときは、メソッドの呼び出しは変わらずに、受信時の処理と受信後の処理が変わる
+```go
+for !(sendEnd && recvEnd) {
+	// (略)送信処理
+	// 受信処理
+	var headerMD metadata.MD
+	if !recvEnd {
+		if headerMD == nil {
+			headerMD, err = stream.Header()
+			if err != nil {
+				fmt.Println(err)
+			} else {
+				fmt.Println(headerMD)
+			}
+		}
+		if res, err := stream.Recv(); err != nil {
+			// (略)
+		} else {
+			fmt.Println(res.GetMessage())
+		}
+	}
+}
+trailerMD := stream.Trailer()
+fmt.Println(trailerMD)
+```
 
 ## 自分用メモ
 ### HTTP/2とは

@@ -14,6 +14,7 @@ import (
 	_ "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -91,7 +92,14 @@ func Hello() {
 	req := &hellopb.HelloRequest{
 		Name: name,
 	}
-	res, err := client.Hello(context.Background(), req)
+
+	ctx := context.Background()
+	md := metadata.New(map[string]string{"type": "unary", "from": "client"}) // メタデータ生成
+	ctx = metadata.NewOutgoingContext(ctx, md)                               // contextに付与
+
+	// メタデータ受信処理
+	var header, trailer metadata.MD
+	res, err := client.Hello(ctx, req, grpc.Header(&header), grpc.Trailer(&trailer))
 	if err != nil {
 		fmt.Println(err)
 		if stat, ok := status.FromError(err); ok {
@@ -100,6 +108,8 @@ func Hello() {
 			fmt.Printf("details: %s\n", stat.Details())
 		}
 	} else {
+		fmt.Println(header)
+		fmt.Println(trailer)
 		fmt.Println(res.GetMessage())
 	}
 }
@@ -112,7 +122,10 @@ func HelloServerStream() {
 	req := &hellopb.HelloRequest{
 		Name: name,
 	}
-	stream, err := client.HelloServerStream(context.Background(), req)
+	ctx := context.Background()
+	md := metadata.New(map[string]string{"type": "stream", "from": "client"})
+	ctx = metadata.NewOutgoingContext(ctx, md)
+	stream, err := client.HelloServerStream(ctx, req)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -133,7 +146,10 @@ func HelloServerStream() {
 }
 
 func HelloClientStream() {
-	stream, err := client.HelloClientStream(context.Background())
+	ctx := context.Background()
+	md := metadata.New(map[string]string{"type": "stream", "from": "client"})
+	ctx = metadata.NewOutgoingContext(ctx, md)
+	stream, err := client.HelloClientStream(ctx)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -152,7 +168,6 @@ func HelloClientStream() {
 			return
 		}
 	}
-
 	res, err := stream.CloseAndRecv()
 	if err != nil {
 		fmt.Println(err)
@@ -162,7 +177,10 @@ func HelloClientStream() {
 }
 
 func HelloBiStreams() {
-	stream, err := client.HelloBiStreams(context.Background())
+	ctx := context.Background()
+	md := metadata.New(map[string]string{"type": "stream", "from": "client"})
+	ctx = metadata.NewOutgoingContext(ctx, md)
+	stream, err := client.HelloBiStreams(ctx)
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -196,7 +214,16 @@ func HelloBiStreams() {
 		}
 
 		// 受信処理
+		var headerMD metadata.MD
 		if !recvEnd {
+			if headerMD == nil {
+				headerMD, err = stream.Header()
+				if err != nil {
+					fmt.Println(err)
+				} else {
+					fmt.Println(headerMD)
+				}
+			}
 			if res, err := stream.Recv(); err != nil {
 				if !errors.Is(err, io.EOF) {
 					fmt.Println(err)
@@ -207,4 +234,6 @@ func HelloBiStreams() {
 			}
 		}
 	}
+	trailerMD := stream.Trailer()
+	fmt.Println(trailerMD)
 }
