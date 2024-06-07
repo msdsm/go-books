@@ -1,0 +1,19 @@
+# GraphQLスキーマファイルのパス
+schema:
+  - ./*.graphqls
+
+# generated.goの保存場所
+exec:
+  filename: internal/generated.go
+  package: internal
+
+# スキーマオブジェクトに対応するGo構造体の保存場所
+model:
+  filename: graph/model/models_gen.go
+  package: model
+
+# リゾルバコードの保存場所
+resolver:
+  layout: follow-schema
+  dir: graph
+  package: graph
