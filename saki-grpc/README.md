@@ -1003,6 +1003,22 @@ trailerMD := stream.Trailer()
 fmt.Println(trailerMD)
 ```
 
+## gRPCとGoの並行処理
+- `grpc.Dial`関数から生成されるコネクションはゴルーチンセーフ
+  - 同じコネクションから異なるサービスと通信するクライアントを生成することは可能
+- クライアントサイドもサーバーサイドもServerStreamやClientStreamで受信、送信をゴルーチンで並行処理することはできない
+- クライアントサイドもサーバーサイドもBiStreamでは送信や受信をそれぞれゴルーチンで並行処理することは可能
+```go
+func (s *myServer) HelloBiStreams(stream hellopb.GreetingService_HelloBiStreamsServer) error {
+	go func() {
+		req, _ := stream.Recv()
+	}()
+	go func() {
+		stream.Send(res)
+	}()
+}
+```
+
 ## 自分用メモ
 ### HTTP/2とは
 - 簡潔にHTTP/2の特徴は以下
